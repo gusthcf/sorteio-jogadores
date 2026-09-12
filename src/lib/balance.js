@@ -8,15 +8,30 @@
  *
  * Estrategia em tres camadas:
  *  1. SNAKE DRAFT   — ordena por estrelas (desc) e distribui em zigue-zague (1,2,3,3,2,1...).
- *  2. HILL CLIMBING — troca pares de jogadores entre times enquanto isso reduzir o desequilibrio.
- *  3. MULTI-START   — repete tudo centenas de vezes e guarda a melhor divisao inedita.
+ *  2. HILL CLIMBING — troca jogadores (1 por 1 e, quando trava, 2 por 2) enquanto isso reduzir
+ *                     o desequilibrio.
+ *  3. MULTI-START   — repete tudo centenas de vezes, partindo de pontos diferentes, e guarda a
+ *                     melhor divisao inedita.
+ *
+ * Restricao dura (`mustPlay`): quem ficou de fora na ultima partida comeca em quadra.
+ * E isso que impede alguem de ficar de fora duas partidas seguidas depois de um novo sorteio.
  *
  * O time incompleto de fora sera completado com jogadores do perdedor quando entrar.
  * Por isso ele e comparado pela sua FORCA PROJETADA: soma atual + vagas × media do grupo.
  */
 
-const r2 = (n) => Math.round(n * 100) / 100
+/** Ate quantas estrelas um jogador e considerado iniciante (0,5 · 1 · 1,5). */
+export const BEGINNER_MAX_RATING = 1.5
+
+const COURT_TEAMS = 2
 const EPSILON = 1e-9
+
+// Protecao para celulares lentos: depois de um minimo de tentativas, para ao estourar o tempo.
+const MIN_ATTEMPTS = 80
+const TIME_BUDGET_MS = 160
+
+const r2 = (n) => Math.round(n * 100) / 100
+const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
 
 function shuffle(arr) {
   // Fisher-Yates
@@ -63,54 +78,131 @@ function snakeOrder(numTeams, total, sizes) {
 /**
  * Custo do desequilibrio. Menor = melhor.
  * `pads` soma a forca esperada das vagas que serao completadas depois.
+ * Os parametros opcionais simulam `sums[i] += di` e `sums[j] += dj` sem criar arrays —
+ * esta funcao roda centenas de milhares de vezes por sorteio.
  */
-function costOf(sums, pads) {
+function costOf(sums, pads, i = -1, di = 0, j = -1, dj = 0) {
+  const n = sums.length
   let max = -Infinity
   let min = Infinity
   let total = 0
-  const values = sums.map((s, i) => s + pads[i])
-  for (const v of values) {
+  for (let k = 0; k < n; k++) {
+    const v = sums[k] + pads[k] + (k === i ? di : 0) + (k === j ? dj : 0)
     if (v > max) max = v
     if (v < min) min = v
     total += v
   }
-  const mean = total / values.length
+  const mean = total / n
   let variance = 0
-  for (const v of values) variance += (v - mean) ** 2
+  for (let k = 0; k < n; k++) {
+    const d = sums[k] + pads[k] + (k === i ? di : 0) + (k === j ? dj : 0) - mean
+    variance += d * d
+  }
   return (max - min) * 1000 + variance
 }
 
-/** Refina por trocas: so aceita a troca que diminui o custo. Preserva o tamanho dos times. */
-function optimize(teams, sums, pads, maxRounds = 14) {
-  let rounds = 0
-  let improved = true
+/**
+ * Tenta trocar uma DUPLA de um time por uma dupla de outro. So e usada quando nenhuma
+ * troca simples melhora mais: e o que tira o otimizador de "otimos locais" (divisoes em
+ * que trocar 1 por 1 nao ajuda, mas 2 por 2 chega no equilibrio perfeito).
+ * Retorna o novo custo, ou null se nenhuma dupla melhora.
+ */
+function tryPairSwap(teams, sums, pads, mustPlay, current) {
+  for (let i = 0; i < teams.length; i++) {
+    for (let j = i + 1; j < teams.length; j++) {
+      const crossesBench = i < COURT_TEAMS && j >= COURT_TEAMS
+      const A = teams[i]
+      const B = teams[j]
+      for (let x1 = 0; x1 < A.length; x1++) {
+        for (let x2 = x1 + 1; x2 < A.length; x2++) {
+          if (crossesBench && (mustPlay.has(A[x1].id) || mustPlay.has(A[x2].id))) continue
+          const out = A[x1].rating + A[x2].rating
+          for (let y1 = 0; y1 < B.length; y1++) {
+            for (let y2 = y1 + 1; y2 < B.length; y2++) {
+              const delta = B[y1].rating + B[y2].rating - out
+              if (delta === 0) continue
+              const cost = costOf(sums, pads, i, delta, j, -delta)
+              if (cost < current - EPSILON) {
+                ;[A[x1], B[y1]] = [B[y1], A[x1]]
+                ;[A[x2], B[y2]] = [B[y2], A[x2]]
+                sums[i] = r2(sums[i] + delta)
+                sums[j] = r2(sums[j] - delta)
+                return cost
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return null
+}
+
+/**
+ * Refina por trocas: so aceita a troca que diminui o custo. Preserva o tamanho dos times
+ * e nunca manda para fora da quadra alguem de `mustPlay`.
+ * Primeiro trocas 1 por 1 (baratas); quando elas esgotam, uma troca 2 por 2 para destravar.
+ */
+function optimize(teams, sums, pads, mustPlay, maxRounds = 24) {
   let current = costOf(sums, pads)
 
-  while (improved && rounds < maxRounds) {
-    improved = false
-    rounds += 1
+  for (let round = 0; round < maxRounds; round++) {
+    let improved = false
     for (let i = 0; i < teams.length; i++) {
       for (let j = i + 1; j < teams.length; j++) {
+        const crossesBench = i < COURT_TEAMS && j >= COURT_TEAMS
         for (let x = 0; x < teams[i].length; x++) {
           for (let y = 0; y < teams[j].length; y++) {
-            const delta = teams[j][y].rating - teams[i][x].rating
+            const a = teams[i][x]
+            const b = teams[j][y]
+            const delta = b.rating - a.rating
             if (delta === 0) continue
-            const trial = sums.slice()
-            trial[i] = r2(trial[i] + delta)
-            trial[j] = r2(trial[j] - delta)
-            const cost = costOf(trial, pads)
+            if (crossesBench && mustPlay.has(a.id)) continue
+            const cost = costOf(sums, pads, i, delta, j, -delta)
             if (cost < current - EPSILON) {
-              const tmp = teams[i][x]
-              teams[i][x] = teams[j][y]
-              teams[j][y] = tmp
-              sums[i] = trial[i]
-              sums[j] = trial[j]
+              teams[i][x] = b
+              teams[j][y] = a
+              sums[i] = r2(sums[i] + delta)
+              sums[j] = r2(sums[j] - delta)
               current = cost
               improved = true
             }
           }
         }
       }
+    }
+    if (improved) continue
+    if (current < EPSILON) break // equilibrio perfeito
+    const pairCost = tryPairSwap(teams, sums, pads, mustPlay, current)
+    if (pairCost === null) break
+    current = pairCost
+  }
+}
+
+/** Traz para a quadra quem nao pode ficar de fora de novo, trocando pela opcao mais equilibrada. */
+function enforceMustPlay(teams, sums, pads, mustPlay) {
+  if (!mustPlay.size) return
+  for (let q = COURT_TEAMS; q < teams.length; q++) {
+    for (let x = 0; x < teams[q].length; x++) {
+      const waiting = teams[q][x]
+      if (!mustPlay.has(waiting.id)) continue
+
+      let best = null
+      for (let c = 0; c < COURT_TEAMS; c++) {
+        for (let y = 0; y < teams[c].length; y++) {
+          const candidate = teams[c][y]
+          if (mustPlay.has(candidate.id)) continue
+          const delta = candidate.rating - waiting.rating
+          const cost = costOf(sums, pads, q, delta, c, -delta)
+          if (!best || cost < best.cost) best = { c, y, delta, cost }
+        }
+      }
+      if (!best) return // a quadra ja esta toda ocupada por quem precisa jogar
+
+      teams[q][x] = teams[best.c][best.y]
+      teams[best.c][best.y] = waiting
+      sums[q] = r2(sums[q] + best.delta)
+      sums[best.c] = r2(sums[best.c] - best.delta)
     }
   }
 }
@@ -147,37 +239,65 @@ function randomPartition(players, sizes) {
   })
 }
 
-const playedBy = (team, matchCounts) => team.reduce((acc, p) => acc + (matchCounts[p.id] || 0), 0)
-
 /**
- * Ordem de entrada: entre os times cheios, quem jogou MENOS partidas no dia comeca em quadra.
- * O time incompleto (se houver) e sempre o ultimo da fila.
+ * Ordem de entrada entre os times cheios: primeiro quem tem gente que PRECISA jogar,
+ * depois quem jogou menos partidas no dia. O time incompleto e sempre o ultimo da fila.
  */
-function orderForCourt(teams, sizes, matchCounts) {
-  const partialIndex = sizes.length > 2 && sizes[sizes.length - 1] < sizes[0] ? sizes.length - 1 : -1
-  const full = teams.filter((_, i) => i !== partialIndex)
-  shuffle(full).sort((a, b) => playedBy(a, matchCounts) - playedBy(b, matchCounts))
-  return partialIndex >= 0 ? [...full, teams[partialIndex]] : full
+function orderForCourt(teams, sizes, matchCounts, mustPlay) {
+  if (sizes.length <= COURT_TEAMS) return teams
+  const partialIndex = sizes[sizes.length - 1] < sizes[0] ? sizes.length - 1 : -1
+  const full = shuffle(teams.filter((_, i) => i !== partialIndex)).map((team) => ({
+    team,
+    needs: team.reduce((acc, p) => acc + (mustPlay.has(p.id) ? 1 : 0), 0),
+    played: team.reduce((acc, p) => acc + (matchCounts[p.id] || 0), 0),
+  }))
+  full.sort((a, b) => b.needs - a.needs || a.played - b.played)
+  const ordered = full.map((entry) => entry.team)
+  return partialIndex >= 0 ? [...ordered, teams[partialIndex]] : ordered
 }
 
 /** Pontua uma divisao ja ordenada. */
-function evaluate(teams, sizes, pads, matchCounts) {
+function evaluate(teams, pads, matchCounts, mustPlay) {
   const sums = teams.map(sumOf)
-  const courtAndFull = teams.filter((t, i) => !(pads[i] > 0))
-  const fullSums = courtAndFull.map(sumOf)
+  let violations = 0
+  let benchBeginners = 0
+  let benchPlayed = 0
+
+  for (let t = COURT_TEAMS; t < teams.length; t++) {
+    for (const p of teams[t]) {
+      if (mustPlay.has(p.id)) violations += 1
+      if (p.rating <= BEGINNER_MAX_RATING) benchBeginners += 1
+      benchPlayed += matchCounts[p.id] || 0
+    }
+  }
+
+  const fullSums = sums.filter((_, i) => !(pads[i] > 0))
   return {
     teams,
     sums,
     cost: costOf(sums, pads),
-    // Desempate: quem ja jogou mais partidas comeca de fora.
-    benchPlayed: teams.slice(2).reduce((acc, t) => acc + playedBy(t, matchCounts), 0),
+    violations,
+    benchBeginners,
+    benchPlayed,
     spread: fullSums.length ? r2(Math.max(...fullSums) - Math.min(...fullSums)) : 0,
     signature: signatureOf(teams),
   }
 }
 
-const isBetter = (a, b) =>
-  !b || a.cost < b.cost - EPSILON || (Math.abs(a.cost - b.cost) <= EPSILON && a.benchPlayed > b.benchPlayed)
+/**
+ * Criterios, em ordem:
+ *  1. ninguem que ficou de fora na ultima partida comeca de fora de novo;
+ *  2. equilibrio;
+ *  3. desempate: menos iniciantes esperando de fora;
+ *  4. desempate: de fora fica quem ja jogou mais partidas no dia.
+ */
+function isBetter(a, b) {
+  if (!b) return true
+  if (a.violations !== b.violations) return a.violations < b.violations
+  if (Math.abs(a.cost - b.cost) > EPSILON) return a.cost < b.cost
+  if (a.benchBeginners !== b.benchBeginners) return a.benchBeginners < b.benchBeginners
+  return a.benchPlayed > b.benchPlayed
+}
 
 /**
  * Sorteia os times ja na ordem de entrada em quadra.
@@ -187,6 +307,7 @@ const isBetter = (a, b) =>
  * @param {number}  options.teamSize            maximo de jogadores por time (padrao 6)
  * @param {Set}     options.excludedSignatures  divisoes que ja sairam nesta sessao
  * @param {object}  options.matchCounts         partidas jogadas por jogador no dia
+ * @param {Set}     options.mustPlay            ids que ficaram de fora na ultima partida
  * @returns {{teams, sums, signature, spread, exhausted} | null}
  *          teams[0] e teams[1] comecam em quadra; o resto e a fila, em ordem.
  */
@@ -195,7 +316,8 @@ export function drawTeams({
   teamSize = 6,
   excludedSignatures = new Set(),
   matchCounts = {},
-  attempts = 420,
+  mustPlay = new Set(),
+  attempts = 300,
 }) {
   const list = (players || []).filter(Boolean)
   const sizes = rotationSizes(list.length, teamSize)
@@ -203,16 +325,24 @@ export function drawTeams({
 
   // Forca esperada das vagas do time incompleto de fora.
   const mean = list.reduce((acc, p) => acc + p.rating, 0) / list.length
-  const pads = sizes.map((size) => (sizes.length > 2 && size < teamSize ? (teamSize - size) * mean : 0))
+  const pads = sizes.map((size) =>
+    sizes.length > COURT_TEAMS && size < teamSize ? (teamSize - size) * mean : 0,
+  )
 
   let best = null // melhor divisao ainda inedita
   let fallback = null // melhor divisao no geral (usada se tudo ja saiu)
 
+  let started = now()
   for (let attempt = 0; attempt < attempts; attempt++) {
-    const raw = buildCandidate(list, sizes)
-    const sums = raw.map(sumOf)
-    optimize(raw, sums, pads)
-    const candidate = evaluate(orderForCourt(raw, sizes, matchCounts), sizes, pads, matchCounts)
+    if (attempt >= MIN_ATTEMPTS && now() - started > TIME_BUDGET_MS) break
+    // A cada 3 tentativas, parte de uma divisao aleatoria em vez do snake draft: comecar
+    // de lugares diferentes evita cair sempre no mesmo otimo local.
+    const start = attempt % 3 === 2 ? randomPartition(list, sizes) : buildCandidate(list, sizes)
+    const teams = orderForCourt(start, sizes, matchCounts, mustPlay)
+    const sums = teams.map(sumOf)
+    enforceMustPlay(teams, sums, pads, mustPlay)
+    optimize(teams, sums, pads, mustPlay)
+    const candidate = evaluate(teams, pads, matchCounts, mustPlay)
 
     if (isBetter(candidate, fallback)) fallback = candidate
     if (!excludedSignatures.has(candidate.signature) && isBetter(candidate, best)) best = candidate
@@ -221,9 +351,13 @@ export function drawTeams({
   // Busca relaxada: com elencos pequenos o otimizador converge sempre para as mesmas
   // divisoes. Se todas ja sairam, aceita a melhor divisao INEDITA mesmo menos equilibrada.
   if (!best) {
+    started = now()
     for (let attempt = 0; attempt < attempts * 3; attempt++) {
-      const raw = randomPartition(list, sizes)
-      const candidate = evaluate(orderForCourt(raw, sizes, matchCounts), sizes, pads, matchCounts)
+      if (attempt >= MIN_ATTEMPTS && now() - started > TIME_BUDGET_MS) break
+      const teams = orderForCourt(randomPartition(list, sizes), sizes, matchCounts, mustPlay)
+      const sums = teams.map(sumOf)
+      enforceMustPlay(teams, sums, pads, mustPlay)
+      const candidate = evaluate(teams, pads, matchCounts, mustPlay)
       if (excludedSignatures.has(candidate.signature)) continue
       if (isBetter(candidate, best)) best = candidate
     }

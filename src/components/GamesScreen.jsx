@@ -99,6 +99,11 @@ export default function GamesScreen({ dayPlayers, matchCounts, matches, onGoToCo
                     <span className="font-semibold">{teamLabel(match.winner)}</span>
                     <span className="text-white/50"> venceu o {teamLabel(match.loser)}</span>
                   </span>
+                  {match.score && (
+                    <span className="num font-display text-[15px] font-bold tracking-tightest text-white/70">
+                      {`${match.score[0]} × ${match.score[1]}`}
+                    </span>
+                  )}
                   {match.streak >= 2 && <span className="chip py-0.5">{match.streak}ª seguida</span>}
                 </p>
                 {match.entered && (

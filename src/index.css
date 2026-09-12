@@ -34,6 +34,8 @@
 
   button {
     @apply select-none;
+    /* Toques rapidos (placar) sem zoom de duplo toque nem atraso de 300ms. */
+    touch-action: manipulation;
   }
 
   /* Foco visivel e consistente em todo o app. */
@@ -49,7 +51,7 @@
 
 @layer components {
   .card {
-    @apply rounded-3xl border border-white/[0.07] bg-ink-850/80 shadow-soft backdrop-blur-sm;
+    @apply rounded-3xl border border-white/[0.07] bg-ink-850 shadow-soft;
   }
 
   .btn {

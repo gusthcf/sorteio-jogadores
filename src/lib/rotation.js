@@ -7,15 +7,18 @@
  *    O resto do perdedor vai para o fim da fila, mantendo o numero do time.
  *  - Se nao houver ninguem de fora, os mesmos dois times seguem jogando.
  *  - O mesmo time vencendo WINS_FOR_REDRAW vezes seguidas dispara um novo sorteio.
+ *
+ * Com ate um time na fila (ate 18 jogadores), quem espera entra SEMPRE na partida seguinte:
+ * ninguem fica de fora duas partidas seguidas.
  */
 
-import { sortTeam } from './balance.js'
+import { BEGINNER_MAX_RATING, sortTeam } from './balance.js'
 
 export const WINS_FOR_REDRAW = 3
 
 /**
  * Margem (em estrelas) sobre o melhor equilibrio possivel dentro da qual o app
- * prefere manter em quadra quem tem MENOS estrelas — iniciantes precisam jogar mais.
+ * prefere manter iniciantes (ate BEGINNER_MAX_RATING) em quadra — eles precisam jogar mais.
  */
 export const BEGINNER_TOLERANCE = 1
 
@@ -41,7 +44,7 @@ export const rotationPlayers = (rotation) =>
   rotation ? [...rotation.court, ...rotation.queue].flatMap((team) => team.players) : []
 
 /** Todas as combinacoes de `k` elementos de `items`. */
-function combinations(items, k) {
+export function combinations(items, k) {
   const result = []
   const pick = (start, acc) => {
     if (acc.length === k) {
@@ -63,8 +66,8 @@ function combinations(items, k) {
  *
  *  1. Calcula, para cada combinacao possivel, a diferenca de estrelas contra o vencedor.
  *  2. Considera "equilibradas" as combinacoes ate BEGINNER_TOLERANCE acima da melhor.
- *  3. Entre elas, fica quem tem MENOS estrelas somadas (prioridade para iniciantes).
- *  4. Desempates: menor diferenca, depois quem jogou menos partidas no dia.
+ *  3. Entre elas, fica quem mantem MAIS iniciantes (0,5 · 1 · 1,5★) em quadra.
+ *  4. Depois vale o melhor equilibrio; empates: menos estrelas, depois quem jogou menos.
  */
 export function pickComplement({ loser, entering, opponent, need, matchCounts = {} }) {
   if (need <= 0) return { stay: [], leave: loser.slice() }
@@ -79,6 +82,7 @@ export function pickComplement({ loser, entering, opponent, need, matchCounts = 
       stay,
       stars,
       gap: r2(Math.abs(base + stars - target)),
+      beginners: stay.filter((p) => p.rating <= BEGINNER_MAX_RATING).length,
       played: stay.reduce((acc, p) => acc + (matchCounts[p.id] || 0), 0),
       tiebreak: Math.random(),
     }
@@ -87,7 +91,12 @@ export function pickComplement({ loser, entering, opponent, need, matchCounts = 
   const bestGap = Math.min(...options.map((o) => o.gap))
   const eligible = options.filter((o) => o.gap <= bestGap + BEGINNER_TOLERANCE + 1e-9)
   eligible.sort(
-    (a, b) => a.stars - b.stars || a.gap - b.gap || a.played - b.played || a.tiebreak - b.tiebreak,
+    (a, b) =>
+      b.beginners - a.beginners ||
+      a.gap - b.gap ||
+      a.stars - b.stars ||
+      a.played - b.played ||
+      a.tiebreak - b.tiebreak,
   )
 
   const stayIds = new Set(eligible[0].stay.map((p) => p.id))

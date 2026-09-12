@@ -8,8 +8,8 @@ import PlayersScreen from './components/PlayersScreen.jsx'
 import { ConfirmDialog, Toast } from './components/Ui.jsx'
 import { IconBall, IconChart, IconCourt, IconRoster, IconShuffle } from './components/Icons.jsx'
 import { formatRating } from './components/StarRating.jsx'
-import { drawTeams } from './lib/balance.js'
-import { registerWinner, rotationPlayers, startRotation } from './lib/rotation.js'
+import { EMPTY_DAY, drawDay, playMatch, restoreDraw, wouldBenchAgain } from './lib/day.js'
+import { rotationPlayers } from './lib/rotation.js'
 import { teamLabel, teamSum } from './lib/teams.js'
 import { clampRating, createId, loadPlayers, savePlayers, storageAvailable } from './lib/storage.js'
 
@@ -20,49 +20,7 @@ const TABS = [
   { id: 'games', label: 'Jogos', Icon: IconChart },
 ]
 
-/**
- * Tudo que acontece "no dia": sorteio atual, rotacao da quadra, contadores e logs.
- * Fica num unico objeto para que "Desfazer" seja so voltar ao snapshot anterior.
- */
-const EMPTY_DAY = {
-  draw: null,
-  rotation: null,
-  matchCounts: {},
-  matches: [],
-  history: [],
-  lastEvent: null,
-}
-
 const UNDO_LIMIT = 40
-
-/** Sorteia a partir de `base` e ja monta a rotacao. Nao mexe em contadores nem no log. */
-function drawInto(base, list, teamSize) {
-  const drawn = drawTeams({
-    players: list,
-    teamSize,
-    excludedSignatures: new Set(base.history.map((entry) => entry.signature)),
-    matchCounts: base.matchCounts,
-  })
-  if (!drawn) return null
-
-  return {
-    ...base,
-    draw: { ...drawn, teamSize },
-    rotation: startRotation(drawn.teams),
-    history: [
-      {
-        id: createId(),
-        at: Date.now(),
-        teams: drawn.teams,
-        sums: drawn.sums,
-        signature: drawn.signature,
-        spread: drawn.spread,
-        teamSize,
-      },
-      ...base.history,
-    ].slice(0, 25),
-  }
-}
 
 export default function App() {
   /* --------------------------------------------------- estado PERSISTENTE */
@@ -77,6 +35,7 @@ export default function App() {
   const [tab, setTab] = useState('roster')
   const [present, setPresent] = useState(() => new Set())
   const [teamSize, setTeamSize] = useState(6)
+  // Tudo do dia fica num objeto so (ver lib/day.js): "Desfazer" e voltar ao snapshot anterior.
   const [day, setDay] = useState(EMPTY_DAY)
   const [undoStack, setUndoStack] = useState([])
 
@@ -177,64 +136,30 @@ export default function App() {
   function handleDraw() {
     // Presenca e a fonte da verdade; se estiver vazia, re-sorteia quem ja esta jogando.
     const pool = presentPlayers.length >= 2 ? presentPlayers : onCourtToday
-    const next = drawInto(day, pool, teamSize)
+    const next = drawDay(day, pool, teamSize)
     if (!next) {
       notify('Marque pelo menos 2 jogadores presentes.')
       return
     }
-
-    commit({
-      ...next,
-      lastEvent: { type: 'draw', spread: next.draw.spread, exhausted: next.draw.exhausted },
-    })
+    commit(next)
     setTab('court')
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+    window.scrollTo({ top: 0 })
     navigator.vibrate?.(12)
   }
 
   /* -------------------------------------------------------------- partida */
   function handleWinner(number) {
     if (!day.rotation) return
-
-    const out = registerWinner(day.rotation, number, {
-      teamSize: day.draw?.teamSize ?? teamSize,
-      matchCounts: day.matchCounts,
-    })
-
-    const matchCounts = { ...day.matchCounts }
-    for (const id of out.played) matchCounts[id] = (matchCounts[id] || 0) + 1
-
-    const match = {
-      id: createId(),
-      at: Date.now(),
-      number: day.matches.length + 1,
-      ...out.event,
-      redraw: out.needsRedraw,
-    }
-
-    let next = {
-      ...day,
-      rotation: out.rotation,
-      matchCounts,
-      matches: [...day.matches, match],
-      lastEvent: { type: 'match', ...out.event },
-    }
-
-    // Regra: o mesmo time vencendo 3 seguidas obriga um novo sorteio.
-    if (out.needsRedraw) {
-      const pool = presentPlayers.length >= 2 ? presentPlayers : onCourtToday
-      const redrawn = drawInto(next, pool, teamSize)
-      if (redrawn) {
-        next = {
-          ...redrawn,
-          lastEvent: { type: 'streak', winner: number, streak: out.event.streak },
-        }
-      }
-    }
-
+    const next = playMatch(day, number, presentPlayers, teamSize)
     commit(next)
-    window.scrollTo({ top: 0, behavior: 'smooth' })
-    navigator.vibrate?.(out.needsRedraw ? [20, 60, 20] : 12)
+    window.scrollTo({ top: 0 })
+    navigator.vibrate?.(next.lastEvent?.type === 'streak' ? [20, 60, 20] : 12)
+  }
+
+  // Placar nao entra no "Desfazer": ja tem o proprio toque para diminuir.
+  function handleScore(number, value) {
+    setDay((current) => ({ ...current, score: { ...current.score, [number]: value } }))
+    navigator.vibrate?.(6)
   }
 
   /* ---------------------------------------------------------- compartilhar */
@@ -326,12 +251,14 @@ export default function App() {
           <CourtScreen
             rotation={day.rotation}
             teamSize={day.draw?.teamSize ?? teamSize}
+            score={day.score}
             lastEvent={day.lastEvent}
             matchNumber={day.matches.length + 1}
             canUndo={undoStack.length > 0}
             presenceChanged={presenceChanged}
             historyCount={day.history.length}
             onWinner={handleWinner}
+            onScore={handleScore}
             onUndo={handleUndo}
             onRedraw={handleDraw}
             onShare={handleShare}
@@ -401,21 +328,11 @@ export default function App() {
         open={historyOpen}
         history={day.history}
         currentSignature={day.draw?.signature}
+        isBlocked={(entry) => wouldBenchAgain(entry, day.satOutLast)}
         onClose={() => setHistoryOpen(false)}
         onRestore={(entry) => {
-          commit({
-            ...day,
-            draw: {
-              teams: entry.teams,
-              sums: entry.sums,
-              signature: entry.signature,
-              spread: entry.spread,
-              teamSize: entry.teamSize,
-              exhausted: false,
-            },
-            rotation: startRotation(entry.teams),
-            lastEvent: { type: 'restore' },
-          })
+          if (wouldBenchAgain(entry, day.satOutLast)) return
+          commit(restoreDraw(day, entry))
           setHistoryOpen(false)
         }}
         onClear={() => {

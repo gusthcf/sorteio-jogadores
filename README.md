@@ -34,13 +34,13 @@ O problema real não é sortear. É **sortear de forma justa e manter a rotaçã
 
 Um site que abre no navegador do celular, não pede cadastro, não tem login e não manda nada para servidor nenhum.
 
-Você cadastra a galera **uma única vez**, dá uma nota de estrelas para cada um, e daí em diante é só: marcar quem veio → sortear → tocar em **Venceu** no fim de cada partida.
+Você cadastra a galera **uma única vez**, dá uma nota de estrelas para cada um, e daí em diante é só: marcar quem veio → sortear → marcar o placar e tocar em **Venceu** no fim de cada partida.
 
 <div align="center">
 
 | 1. Elenco | 2. Sorteio | 3. Quadra | 4. Jogos |
 |:---:|:---:|:---:|:---:|
-| Cada jogador com nota de **1 a 5 estrelas** (com meia estrela) | Marque **quem veio hoje** | Aponte o **vencedor** e o app monta a próxima partida | **Quantas partidas** cada um jogou no dia |
+| Cada jogador com nota de **1 a 5 estrelas** (com meia estrela) | Marque **quem veio hoje** | **Placar**, vencedor e a próxima partida montada | **Quantas partidas** cada um jogou no dia |
 
 </div>
 
@@ -81,7 +81,7 @@ O objetivo é fazer a **soma de estrelas de cada time ficar o mais próxima poss
 
 O time incompleto de fora é comparado pela sua **força projetada**: a soma atual mais a média do grupo para cada vaga que ainda será preenchida. Assim ele não fica nem com os melhores, nem com os piores.
 
-Com um grupo típico, os times cheios saem com diferença de **0 ou 0,5 estrela**.
+Os testes comparam o resultado com a **força bruta** (todas as divisões possíveis): para 12 e 18 jogadores, o app sempre encontra a menor diferença que existe.
 
 ### 4. A regra de ouro: nunca repetir
 
@@ -89,12 +89,23 @@ Pediu um novo sorteio com a mesma galera? O app **garante que a divisão exata a
 
 ### 5. Controle das partidas (aba Quadra)
 
-Depois do sorteio, a aba **Quadra** vira o placar do dia. No fim de cada jogo, basta tocar em **Venceu** no time vencedor ([`src/lib/rotation.js`](src/lib/rotation.js)):
+Depois do sorteio, a aba **Quadra** vira o placar do dia ([`src/lib/rotation.js`](src/lib/rotation.js)):
 
 1. **Quem vence continua** em quadra.
 2. **O primeiro time da fila entra** no lugar de quem perdeu (Time 3, depois Time 4, e assim por diante).
 3. **Quem perdeu vai para o fim da fila**.
 4. Se não houver ninguém de fora, os mesmos dois times seguem jogando.
+
+#### Placar
+
+Acima do botão **Venceu** de cada time fica o placar, de 0 a 99. **Toque à direita do número para somar um ponto e à esquerda para tirar** — assim uma marcação errada se corrige com um toque. O placar final fica registrado no resultado da partida.
+
+#### Ninguém fica de fora duas partidas seguidas
+
+- Com **até 18 jogadores**, só um time espera por vez — e ele **sempre entra na partida seguinte**.
+- Nos **novos sorteios** (automático ou manual), quem ficou de fora na última partida é **obrigado a começar em quadra**. Isso vale também quando alguém chega no meio do dia.
+- Um sorteio antigo do histórico só pode ser reutilizado se não colocar de fora, de novo, quem acabou de esperar.
+- Com **mais de 18**, dois times esperam e o Time 4 precisa aguardar o Time 3 entrar: nesse caso a espera máxima é de duas partidas.
 
 #### Completando o time que entra
 
@@ -102,14 +113,14 @@ Se o time que vai entrar está incompleto (por exemplo, o Time 3 com 1 jogador),
 
 1. O app calcula todas as combinações possíveis e acha **a de melhor equilíbrio** contra o time vencedor.
 2. Considera equilibradas todas as combinações até **1 estrela** acima dessa melhor.
-3. Entre elas, **ficam em quadra os jogadores com menos estrelas** — iniciantes precisam jogar mais para evoluir.
-4. Em empate, fica quem jogou menos partidas no dia.
+3. Entre elas, **mantém em quadra o maior número possível de iniciantes (0,5, 1 e 1,5★)** — eles precisam jogar mais para evoluir.
+4. Depois disso vale o melhor equilíbrio; em empate, fica quem tem menos estrelas e, por último, quem jogou menos partidas no dia.
 
-Os jogadores que continuaram aparecem marcados com a origem (ex.: `T2`), e o restante do time perdedor vai para o fim da fila.
+Se manter um iniciante deixaria a partida desequilibrada além dessa margem, o equilíbrio vence. Os jogadores que continuaram aparecem marcados com a origem (ex.: `T2`).
 
 #### 3 vitórias seguidas = novo sorteio
 
-Se **o mesmo time vencer 3 partidas seguidas**, o app faz **um novo sorteio automaticamente** para reequilibrar o dia. A contagem de partidas continua valendo, e os times cheios que jogaram menos começam em quadra.
+Se **o mesmo time vencer 3 partidas seguidas**, o app faz **um novo sorteio automaticamente** para reequilibrar o dia. A contagem de partidas continua valendo e quem estava de fora começa jogando.
 
 #### Desfazer
 
@@ -117,7 +128,7 @@ Tocou no time errado? O botão **Desfazer** volta a última ação — resultado
 
 ### 6. Contador de partidas (aba Jogos)
 
-Cada jogador tem **quantas partidas jogou no dia**, com uma barra comparativa, além do registro de todos os resultados: quem venceu, quem entrou e quem continuou.
+Cada jogador tem **quantas partidas jogou no dia**, com uma barra comparativa, além do registro de todos os resultados: placar, quem venceu, quem entrou e quem continuou.
 
 ### 7. Compartilhamento
 
@@ -132,11 +143,29 @@ O botão de compartilhar manda a partida atual e a fila formatadas direto no Wha
 | **Jogadores e estrelas** | 🔒 Salvo no `localStorage` | Você cadastra uma vez e nunca mais |
 | **Quem veio hoje** | ♻️ Zera ao recarregar | A presença muda todo dia |
 | **Times, fila e sorteios** | ♻️ Zera ao recarregar | É resultado do dia, não configuração |
-| **Partidas e contadores** | ♻️ Zera ao recarregar | A contagem vale para a pelada de hoje |
+| **Placar, partidas e contadores** | ♻️ Zera ao recarregar | A contagem vale para a pelada de hoje |
 
 > ⚠️ Como a rotação do dia fica só em memória, **evite recarregar a página no meio da pelada**.
 
 Nada sai do seu aparelho. **Não existe servidor, banco de dados, conta ou rastreamento.**
+
+---
+
+## 🧪 Testes
+
+```bash
+npm test
+```
+
+A suíte ([`tests/rules.test.js`](tests/rules.test.js)) usa o test runner nativo do Node, sem dependências, e simula **milhares de partidas** exercitando exatamente o mesmo código da tela. Ela verifica:
+
+- formato dos times (13 → 6·6·1, 19 → 6·6·6·1…) e que ninguém some ou aparece duplicado;
+- equilíbrio igual ao ótimo encontrado por força bruta (12 e 18 jogadores);
+- que um novo sorteio nunca repete a divisão anterior;
+- ordem da quadra: vencedor fica, Time 3 antes do Time 4, perdedor para o fim da fila;
+- a escolha de quem completa o time: equilíbrio primeiro, iniciantes com prioridade dentro da margem;
+- **ninguém fica de fora duas partidas seguidas** com 13 a 18 jogadores, inclusive após sorteios automáticos, manuais e com gente chegando;
+- 3 vitórias seguidas disparando o sorteio, contadores de partidas e placar registrado.
 
 ---
 
@@ -179,19 +208,22 @@ src/
 ├── lib/
 │   ├── balance.js          # Formato dos times, balanceamento e anti-repetição
 │   ├── rotation.js         # Fila da quadra, complemento de times e regra das 3 vitórias
+│   ├── day.js              # Estado do dia: sorteios, partidas, placar e "ninguém de fora 2x"
 │   ├── teams.js            # Nomes, cores e utilitários dos times
 │   └── storage.js          # Persistência do elenco no localStorage
 ├── components/
 │   ├── PlayersScreen.jsx   # Aba Elenco: listar, editar, excluir
 │   ├── PlayerFormSheet.jsx # Cadastro/edição de jogador
 │   ├── DrawScreen.jsx      # Aba Sorteio: presença + prévia do formato
-│   ├── CourtScreen.jsx     # Aba Quadra: partida atual, vencedor e fila
+│   ├── CourtScreen.jsx     # Aba Quadra: placar, vencedor e fila
 │   ├── GamesScreen.jsx     # Aba Jogos: partidas por jogador e resultados
 │   ├── HistorySheet.jsx    # Sorteios da sessão
 │   ├── StarRating.jsx      # Estrelas com meio ponto
 │   ├── Icons.jsx           # Ícones SVG próprios
 │   └── Ui.jsx              # Bottom sheet, stepper, toast, avatar…
-└── App.jsx                 # Estado do dia, desfazer e navegação
+└── App.jsx                 # Telas, navegação e "Desfazer"
+tests/
+└── rules.test.js           # Regras do dia verificadas por simulação
 ```
 
 ---

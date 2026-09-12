@@ -4,6 +4,8 @@ import {
   IconAlert,
   IconCourt,
   IconHistory,
+  IconMinus,
+  IconPlus,
   IconShare,
   IconShuffle,
   IconTrophy,
@@ -12,6 +14,8 @@ import {
 import { balanceLabel } from '../lib/balance.js'
 import { WINS_FOR_REDRAW } from '../lib/rotation.js'
 import { listNames, teamAccent, teamLabel, teamSum } from '../lib/teams.js'
+
+const MAX_SCORE = 99
 
 /* ------------------------------------------------------ o que acabou de mudar */
 
@@ -46,7 +50,7 @@ function describeEvent(event, rotation) {
       return {
         accent: true,
         title: `${teamLabel(event.winner)} venceu ${event.streak} seguidas!`,
-        detail: 'Novos times foram sorteados. A contagem de partidas do dia continua valendo.',
+        detail: 'Novos times foram sorteados. Quem estava de fora começa jogando.',
       }
     case 'restore':
       return { title: 'Sorteio anterior de volta', detail: 'A rotação recomeçou com esses times.' }
@@ -95,11 +99,51 @@ function EventCard({ event, rotation, canUndo, onUndo }) {
   )
 }
 
+/* ---------------------------------------------------------------- placar */
+
+/** Toque na metade direita soma um ponto; na metade esquerda, tira. */
+function ScorePad({ value, onChange, label }) {
+  const change = (next) => {
+    const clamped = Math.min(MAX_SCORE, Math.max(0, next))
+    if (clamped !== value) onChange(clamped)
+  }
+
+  return (
+    <div className="relative mt-4 h-[76px] overflow-hidden rounded-2xl border border-white/10 bg-ink-900">
+      <button
+        type="button"
+        aria-label={`Tirar um ponto do ${label}`}
+        disabled={value <= 0}
+        onClick={() => change(value - 1)}
+        className="absolute inset-y-0 left-0 w-1/2 transition-colors active:bg-white/[0.07] disabled:cursor-default"
+      />
+      <button
+        type="button"
+        aria-label={`Somar um ponto ao ${label}`}
+        disabled={value >= MAX_SCORE}
+        onClick={() => change(value + 1)}
+        className="absolute inset-y-0 right-0 w-1/2 transition-colors active:bg-volt-500/[0.12] disabled:cursor-default"
+      />
+      <div className="pointer-events-none absolute inset-0 flex items-center justify-between px-2.5">
+        <IconMinus className={`h-4 w-4 ${value <= 0 ? 'text-white/10' : 'text-white/35'}`} />
+        <span
+          aria-live="polite"
+          className="num font-display text-[42px] font-extrabold leading-none tracking-tightest"
+        >
+          {value}
+        </span>
+        <IconPlus className={`h-4 w-4 ${value >= MAX_SCORE ? 'text-white/10' : 'text-white/35'}`} />
+      </div>
+    </div>
+  )
+}
+
 /* ---------------------------------------------------------------- quadra */
 
-function CourtTeam({ team, onWinner }) {
+function CourtTeam({ team, score, onScore, onWinner }) {
   const accent = teamAccent(team.number)
   const joined = new Set(team.joined)
+  const label = teamLabel(team.number)
 
   return (
     <div className="flex min-w-0 flex-col bg-ink-850 px-3 pb-3 pt-4">
@@ -108,9 +152,7 @@ function CourtTeam({ team, onWinner }) {
           className="h-2.5 w-2.5 shrink-0 rounded-full"
           style={{ background: accent, boxShadow: `0 0 12px ${accent}80` }}
         />
-        <h3 className="truncate font-display text-[17px] font-bold tracking-tightest">
-          {teamLabel(team.number)}
-        </h3>
+        <h3 className="truncate font-display text-[17px] font-bold tracking-tightest">{label}</h3>
       </div>
       <p className="num mt-0.5 text-[12px] text-white/35">
         {formatRating(teamSum(team.players))}★ · {team.players.length} jog.
@@ -125,7 +167,7 @@ function CourtTeam({ team, onWinner }) {
                 title={`Continuou do ${teamLabel(team.joinedFrom)}`}
                 className="shrink-0 rounded-md bg-white/[0.08] px-1 py-px text-[9.5px] font-bold text-white/55"
               >
-                T{team.joinedFrom}
+                {`T${team.joinedFrom}`}
               </span>
             )}
             <span className="num shrink-0 text-[11.5px] text-white/30">{formatRating(player.rating)}</span>
@@ -133,10 +175,12 @@ function CourtTeam({ team, onWinner }) {
         ))}
       </ul>
 
+      <ScorePad value={score} label={label} onChange={(value) => onScore(team.number, value)} />
+
       <button
         type="button"
         onClick={() => onWinner(team.number)}
-        className="btn-primary mt-4 w-full py-3 text-[14.5px] shadow-none"
+        className="btn-primary mt-2.5 w-full py-3 text-[14.5px] shadow-none"
       >
         <IconTrophy className="h-[18px] w-[18px]" />
         Venceu
@@ -176,15 +220,16 @@ function QueueCard({ team, position, teamSize }) {
   return (
     <li className="card flex gap-3 p-3.5">
       <span className="num flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/[0.05] font-display text-[15px] font-bold text-white/70">
-        {position}º
+        {`${position}º`}
       </span>
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: teamAccent(team.number) }} />
           <span className="font-display text-[16px] font-bold tracking-tightest">{teamLabel(team.number)}</span>
           <span className="num text-[12px] text-white/35">
-            {team.players.length} jog. · {formatRating(teamSum(team.players))}★
+            {`${team.players.length} jog. · ${formatRating(teamSum(team.players))}★`}
           </span>
+          {position === 1 && <span className="chip ml-auto py-0.5">entra na próxima</span>}
         </div>
         <p className="mt-1 text-[13px] leading-snug text-white/50">
           {team.players.map((p) => p.name).join(', ')}
@@ -204,12 +249,14 @@ function QueueCard({ team, position, teamSize }) {
 export default function CourtScreen({
   rotation,
   teamSize,
+  score,
   lastEvent,
   matchNumber,
   canUndo,
   presenceChanged,
   historyCount,
   onWinner,
+  onScore,
   onUndo,
   onRedraw,
   onShare,
@@ -281,8 +328,15 @@ export default function CourtScreen({
         </header>
 
         <div className="relative grid grid-cols-2 gap-px border-t border-white/[0.05] bg-white/[0.05]">
-          <CourtTeam team={left} onWinner={onWinner} />
-          <CourtTeam team={right} onWinner={onWinner} />
+          {[left, right].map((team) => (
+            <CourtTeam
+              key={team.number}
+              team={team}
+              score={score[team.number] || 0}
+              onScore={onScore}
+              onWinner={onWinner}
+            />
+          ))}
           <span className="pointer-events-none absolute left-1/2 top-3.5 flex h-7 w-7 -translate-x-1/2 items-center justify-center rounded-full border border-white/10 bg-ink-900 text-[12px] font-bold text-white/40">
             ×
           </span>
@@ -296,7 +350,12 @@ export default function CourtScreen({
         {rotation.queue.length ? (
           <ol className="space-y-2.5">
             {rotation.queue.map((team, index) => (
-              <QueueCard key={team.number} team={team} position={index + 1} teamSize={teamSize} />
+              <QueueCard
+                key={`${team.number}-${team.players.map((p) => p.id).join('.')}`}
+                team={team}
+                position={index + 1}
+                teamSize={teamSize}
+              />
             ))}
           </ol>
         ) : (

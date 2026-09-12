@@ -5,7 +5,15 @@ import { teamAccent, teamLabel } from '../lib/teams.js'
 const time = (timestamp) =>
   new Date(timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
 
-export default function HistorySheet({ open, history, currentSignature, onClose, onRestore, onClear }) {
+export default function HistorySheet({
+  open,
+  history,
+  currentSignature,
+  isBlocked,
+  onClose,
+  onRestore,
+  onClear,
+}) {
   return (
     <Sheet
       open={open}
@@ -23,6 +31,7 @@ export default function HistorySheet({ open, history, currentSignature, onClose,
       <ol className="space-y-3 pb-2">
         {history.map((entry, index) => {
           const isCurrent = entry.signature === currentSignature
+          const blocked = !isCurrent && isBlocked(entry)
           return (
             <li
               key={entry.id}
@@ -35,6 +44,12 @@ export default function HistorySheet({ open, history, currentSignature, onClose,
                 <span className="num text-[12px] text-white/30">{time(entry.at)}</span>
                 {isCurrent ? (
                   <span className="chip ml-auto border-volt-500/30 text-volt-500">atual</span>
+                ) : blocked ? (
+                  <span className="ml-auto text-right text-[11.5px] leading-tight text-white/30">
+                    Indisponível: alguém ficaria
+                    <br />
+                    de fora 2 partidas seguidas
+                  </span>
                 ) : (
                   <button
                     type="button"
