@@ -1,7 +1,6 @@
 import { formatRating } from './StarRating.jsx'
 import { Sheet } from './Ui.jsx'
-import { TEAM_ACCENTS, teamName } from './TeamsScreen.jsx'
-import { IconEye } from './Icons.jsx'
+import { teamAccent, teamLabel } from '../lib/teams.js'
 
 const time = (timestamp) =>
   new Date(timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
@@ -32,20 +31,17 @@ export default function HistorySheet({ open, history, currentSignature, onClose,
               }`}
             >
               <div className="mb-2.5 flex items-center gap-2">
-                <span className="num text-[13px] font-bold">
-                  Sorteio {history.length - index}
-                </span>
+                <span className="num text-[13px] font-bold">Sorteio {history.length - index}</span>
                 <span className="num text-[12px] text-white/30">{time(entry.at)}</span>
                 {isCurrent ? (
-                  <span className="chip ml-auto border-volt-500/30 text-volt-500">em quadra</span>
+                  <span className="chip ml-auto border-volt-500/30 text-volt-500">atual</span>
                 ) : (
                   <button
                     type="button"
                     onClick={() => onRestore(entry)}
-                    className="ml-auto inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[12px] font-semibold text-white/40 transition hover:bg-white/5 hover:text-white"
+                    className="ml-auto rounded-lg px-2 py-1 text-[12px] font-semibold text-white/40 transition hover:bg-white/5 hover:text-white"
                   >
-                    <IconEye className="h-4 w-4" />
-                    Ver
+                    Usar este
                   </button>
                 )}
               </div>
@@ -55,10 +51,10 @@ export default function HistorySheet({ open, history, currentSignature, onClose,
                   <div key={teamIndex} className="flex items-start gap-2.5">
                     <span
                       className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full"
-                      style={{ background: TEAM_ACCENTS[teamIndex % TEAM_ACCENTS.length] }}
+                      style={{ background: teamAccent(teamIndex + 1) }}
                     />
                     <p className="min-w-0 flex-1 text-[13px] leading-snug text-white/50">
-                      <span className="font-semibold text-white/70">{teamName(teamIndex)}</span>{' '}
+                      <span className="font-semibold text-white/70">{teamLabel(teamIndex + 1)}</span>{' '}
                       {team.map((p) => p.name).join(', ')}
                     </p>
                     <span className="num shrink-0 text-[12.5px] font-semibold text-white/40">

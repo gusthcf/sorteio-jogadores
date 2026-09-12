@@ -123,3 +123,31 @@ export const IconEye = (p) => (
     <circle cx="12" cy="12" r="2.8" />
   </Svg>
 )
+
+export const IconUndo = (p) => (
+  <Svg {...p}>
+    <path d="M9 14 4 9l5-5" />
+    <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />
+  </Svg>
+)
+
+export const IconCourt = (p) => (
+  <Svg {...p}>
+    <rect x="3" y="6" width="18" height="12" rx="2" />
+    <path d="M12 3.5v17" />
+    <path d="M12 8.5h0M12 12h0M12 15.5h0" strokeWidth="3" />
+  </Svg>
+)
+
+export const IconChart = (p) => (
+  <Svg {...p}>
+    <path d="M5 20v-8M12 20V5M19 20v-5" />
+  </Svg>
+)
+
+export const IconAlert = (p) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M12 8v4.5M12 16h.01" />
+  </Svg>
+)

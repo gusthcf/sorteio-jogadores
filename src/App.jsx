@@ -1,20 +1,68 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import CourtScreen from './components/CourtScreen.jsx'
 import DrawScreen from './components/DrawScreen.jsx'
+import GamesScreen from './components/GamesScreen.jsx'
 import HistorySheet from './components/HistorySheet.jsx'
 import PlayerFormSheet from './components/PlayerFormSheet.jsx'
 import PlayersScreen from './components/PlayersScreen.jsx'
-import TeamsScreen, { teamName } from './components/TeamsScreen.jsx'
 import { ConfirmDialog, Toast } from './components/Ui.jsx'
-import { IconBall, IconRoster, IconShuffle, IconTrophy } from './components/Icons.jsx'
+import { IconBall, IconChart, IconCourt, IconRoster, IconShuffle } from './components/Icons.jsx'
 import { formatRating } from './components/StarRating.jsx'
 import { drawTeams } from './lib/balance.js'
+import { registerWinner, rotationPlayers, startRotation } from './lib/rotation.js'
+import { teamLabel, teamSum } from './lib/teams.js'
 import { clampRating, createId, loadPlayers, savePlayers, storageAvailable } from './lib/storage.js'
 
 const TABS = [
   { id: 'roster', label: 'Elenco', Icon: IconRoster },
   { id: 'draw', label: 'Sorteio', Icon: IconShuffle },
-  { id: 'teams', label: 'Times', Icon: IconTrophy },
+  { id: 'court', label: 'Quadra', Icon: IconCourt },
+  { id: 'games', label: 'Jogos', Icon: IconChart },
 ]
+
+/**
+ * Tudo que acontece "no dia": sorteio atual, rotacao da quadra, contadores e logs.
+ * Fica num unico objeto para que "Desfazer" seja so voltar ao snapshot anterior.
+ */
+const EMPTY_DAY = {
+  draw: null,
+  rotation: null,
+  matchCounts: {},
+  matches: [],
+  history: [],
+  lastEvent: null,
+}
+
+const UNDO_LIMIT = 40
+
+/** Sorteia a partir de `base` e ja monta a rotacao. Nao mexe em contadores nem no log. */
+function drawInto(base, list, teamSize) {
+  const drawn = drawTeams({
+    players: list,
+    teamSize,
+    excludedSignatures: new Set(base.history.map((entry) => entry.signature)),
+    matchCounts: base.matchCounts,
+  })
+  if (!drawn) return null
+
+  return {
+    ...base,
+    draw: { ...drawn, teamSize },
+    rotation: startRotation(drawn.teams),
+    history: [
+      {
+        id: createId(),
+        at: Date.now(),
+        teams: drawn.teams,
+        sums: drawn.sums,
+        signature: drawn.signature,
+        spread: drawn.spread,
+        teamSize,
+      },
+      ...base.history,
+    ].slice(0, 25),
+  }
+}
 
 export default function App() {
   /* --------------------------------------------------- estado PERSISTENTE */
@@ -28,11 +76,9 @@ export default function App() {
   /* ------------------------------------------------------- estado VOLATIL */
   const [tab, setTab] = useState('roster')
   const [present, setPresent] = useState(() => new Set())
-  const [mode, setMode] = useState('teams')
-  const [teamCount, setTeamCount] = useState(2)
-  const [playersPerTeam, setPlayersPerTeam] = useState(6)
-  const [result, setResult] = useState(null)
-  const [history, setHistory] = useState([])
+  const [teamSize, setTeamSize] = useState(6)
+  const [day, setDay] = useState(EMPTY_DAY)
+  const [undoStack, setUndoStack] = useState([])
 
   /* ------------------------------------------------------------- overlays */
   const [formOpen, setFormOpen] = useState(false)
@@ -55,6 +101,20 @@ export default function App() {
       notify('Seu navegador bloqueou o armazenamento: o elenco não será salvo.')
     }
   }, [notify])
+
+  /** Aplica uma mudanca no dia guardando o estado anterior para o "Desfazer". */
+  function commit(next) {
+    setUndoStack((stack) => [day, ...stack].slice(0, UNDO_LIMIT))
+    setDay(next)
+  }
+
+  function handleUndo() {
+    if (!undoStack.length) return
+    const [previous, ...rest] = undoStack
+    setDay(previous)
+    setUndoStack(rest)
+    notify('Última ação desfeita.')
+  }
 
   /* --------------------------------------------------------------- elenco */
   function handleSavePlayer({ id, name, rating }) {
@@ -98,67 +158,103 @@ export default function App() {
     [players, present],
   )
 
-  // Quantidade de times: escolhida direto ou derivada do tamanho desejado de time.
-  const numTeams = useMemo(() => {
-    if (mode === 'teams') return teamCount
-    if (presentPlayers.length < 2) return 2
-    return Math.max(2, Math.floor(presentPlayers.length / playersPerTeam))
-  }, [mode, teamCount, playersPerTeam, presentPlayers.length])
+  const onCourtToday = useMemo(() => rotationPlayers(day.rotation), [day.rotation])
+
+  const presenceChanged = useMemo(() => {
+    if (!day.rotation) return false
+    if (onCourtToday.length !== present.size) return true
+    return onCourtToday.some((p) => !present.has(p.id))
+  }, [day.rotation, onCourtToday, present])
+
+  // Quem aparece na contagem: quem esta na rotacao + quem ja jogou alguma partida hoje.
+  const dayPlayers = useMemo(() => {
+    const byId = new Map(onCourtToday.map((p) => [p.id, p]))
+    for (const p of players) if (day.matchCounts[p.id] != null) byId.set(p.id, p)
+    return [...byId.values()].map((p) => players.find((x) => x.id === p.id) || p)
+  }, [onCourtToday, players, day.matchCounts])
 
   /* -------------------------------------------------------------- sorteio */
-  const runDraw = useCallback(
-    (isRedraw) => {
-      const list = players.filter((p) => present.has(p.id))
-      if (list.length < numTeams || numTeams < 2) {
-        notify('Marque mais jogadores presentes para esse formato.')
-        return
+  function handleDraw() {
+    // Presenca e a fonte da verdade; se estiver vazia, re-sorteia quem ja esta jogando.
+    const pool = presentPlayers.length >= 2 ? presentPlayers : onCourtToday
+    const next = drawInto(day, pool, teamSize)
+    if (!next) {
+      notify('Marque pelo menos 2 jogadores presentes.')
+      return
+    }
+
+    commit({
+      ...next,
+      lastEvent: { type: 'draw', spread: next.draw.spread, exhausted: next.draw.exhausted },
+    })
+    setTab('court')
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+    navigator.vibrate?.(12)
+  }
+
+  /* -------------------------------------------------------------- partida */
+  function handleWinner(number) {
+    if (!day.rotation) return
+
+    const out = registerWinner(day.rotation, number, {
+      teamSize: day.draw?.teamSize ?? teamSize,
+      matchCounts: day.matchCounts,
+    })
+
+    const matchCounts = { ...day.matchCounts }
+    for (const id of out.played) matchCounts[id] = (matchCounts[id] || 0) + 1
+
+    const match = {
+      id: createId(),
+      at: Date.now(),
+      number: day.matches.length + 1,
+      ...out.event,
+      redraw: out.needsRedraw,
+    }
+
+    let next = {
+      ...day,
+      rotation: out.rotation,
+      matchCounts,
+      matches: [...day.matches, match],
+      lastEvent: { type: 'match', ...out.event },
+    }
+
+    // Regra: o mesmo time vencendo 3 seguidas obriga um novo sorteio.
+    if (out.needsRedraw) {
+      const pool = presentPlayers.length >= 2 ? presentPlayers : onCourtToday
+      const redrawn = drawInto(next, pool, teamSize)
+      if (redrawn) {
+        next = {
+          ...redrawn,
+          lastEvent: { type: 'streak', winner: number, streak: out.event.streak },
+        }
       }
+    }
 
-      const excludedSignatures = new Set(history.map((entry) => entry.signature))
-      const drawn = drawTeams({ players: list, numTeams, excludedSignatures })
-      if (!drawn) return
-
-      setResult(drawn)
-      setHistory((prev) =>
-        [
-          {
-            id: createId(),
-            at: Date.now(),
-            teams: drawn.teams,
-            sums: drawn.sums,
-            signature: drawn.signature,
-            spread: drawn.spread,
-          },
-          ...prev,
-        ].slice(0, 25),
-      )
-      setTab('teams')
-      window.scrollTo({ top: 0, behavior: 'smooth' })
-      navigator.vibrate?.(12)
-
-      if (drawn.exhausted) {
-        notify('Todas as divisões possíveis já saíram hoje — repetimos a mais equilibrada.')
-      } else if (isRedraw) {
-        notify('Times novos, nenhuma repetição.')
-      }
-    },
-    [players, present, numTeams, history, notify],
-  )
+    commit(next)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+    navigator.vibrate?.(out.needsRedraw ? [20, 60, 20] : 12)
+  }
 
   /* ---------------------------------------------------------- compartilhar */
   async function handleShare() {
-    if (!result) return
+    if (!day.rotation) return
+    const { court, queue } = day.rotation
     const date = new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })
+    const line = (team) =>
+      `${teamLabel(team.number)} (${formatRating(teamSum(team.players))}★): ${team.players
+        .map((p) => p.name)
+        .join(', ')}`
+
     const text = [
-      `\u{1F3D0} Times do dia ${date}`,
+      `\u{1F3D0} Partida ${day.matches.length + 1} · ${date}`,
       '',
-      ...result.teams.map((team, index) =>
-        [
-          `${teamName(index).toUpperCase()} - ${formatRating(result.sums[index])}★`,
-          ...team.map((p) => `- ${p.name} (${formatRating(p.rating)})`),
-        ].join('\n'),
-      ),
-    ].join('\n\n')
+      'EM QUADRA',
+      line(court[0]),
+      line(court[1]),
+      ...(queue.length ? ['', 'NA FILA', ...queue.map((team, i) => `${i + 1}º ${line(team)}`)] : []),
+    ].join('\n')
 
     try {
       if (navigator.share) {
@@ -173,7 +269,11 @@ export default function App() {
   }
 
   /* ---------------------------------------------------------------- render */
-  const presentCount = presentPlayers.length
+  const subtitle = day.rotation
+    ? `Partida ${day.matches.length + 1} · ${onCourtToday.length} jogando hoje`
+    : presentPlayers.length > 0
+      ? `${presentPlayers.length} presentes`
+      : 'Vôlei sem discussão na hora de dividir'
 
   return (
     <div className="relative z-10 mx-auto flex min-h-full w-full max-w-md flex-col">
@@ -186,11 +286,7 @@ export default function App() {
             <h1 className="font-display text-[21px] font-extrabold leading-none tracking-tightest">
               Sorteio de Times
             </h1>
-            <p className="mt-1 text-[12.5px] font-medium text-white/35">
-              {presentCount > 0
-                ? `${presentCount} em quadra · ${numTeams} times`
-                : 'Vôlei sem discussão na hora de dividir'}
-            </p>
+            <p className="num mt-1 text-[12.5px] font-medium text-white/35">{subtitle}</p>
           </div>
         </div>
       </header>
@@ -218,33 +314,45 @@ export default function App() {
             onTogglePresent={togglePresent}
             onSelectAll={() => setPresent(new Set(players.map((p) => p.id)))}
             onClearAll={() => setPresent(new Set())}
-            mode={mode}
-            onModeChange={setMode}
-            teamCount={teamCount}
-            onTeamCountChange={setTeamCount}
-            playersPerTeam={playersPerTeam}
-            onPlayersPerTeamChange={setPlayersPerTeam}
-            numTeams={numTeams}
-            onDraw={() => runDraw(false)}
+            teamSize={teamSize}
+            onTeamSizeChange={setTeamSize}
+            hasSession={Boolean(day.rotation)}
+            onDraw={handleDraw}
             onGoToRoster={() => setTab('roster')}
           />
         )}
 
-        {tab === 'teams' && (
-          <TeamsScreen
-            result={result}
-            historyCount={history.length}
-            onRedraw={() => runDraw(true)}
-            onOpenHistory={() => setHistoryOpen(true)}
+        {tab === 'court' && (
+          <CourtScreen
+            rotation={day.rotation}
+            teamSize={day.draw?.teamSize ?? teamSize}
+            lastEvent={day.lastEvent}
+            matchNumber={day.matches.length + 1}
+            canUndo={undoStack.length > 0}
+            presenceChanged={presenceChanged}
+            historyCount={day.history.length}
+            onWinner={handleWinner}
+            onUndo={handleUndo}
+            onRedraw={handleDraw}
             onShare={handleShare}
+            onOpenHistory={() => setHistoryOpen(true)}
             onGoToDraw={() => setTab('draw')}
+          />
+        )}
+
+        {tab === 'games' && (
+          <GamesScreen
+            dayPlayers={dayPlayers}
+            matchCounts={day.matchCounts}
+            matches={day.matches}
+            onGoToCourt={() => setTab('court')}
           />
         )}
       </main>
 
       {/* --------------------------------------------------------- navegacao */}
       <nav className="fixed inset-x-0 bottom-0 z-40 mx-auto w-full max-w-md border-t border-white/[0.07] bg-ink-950/90 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl">
-        <div className="grid grid-cols-3">
+        <div className="grid grid-cols-4">
           {TABS.map(({ id, label, Icon }) => {
             const active = tab === id
             return (
@@ -257,11 +365,11 @@ export default function App() {
                   active ? 'text-white' : 'text-white/30 hover:text-white/55'
                 }`}
               >
-                {active && <span className="absolute inset-x-6 top-0 h-0.5 rounded-full bg-volt-500" />}
+                {active && <span className="absolute inset-x-5 top-0 h-0.5 rounded-full bg-volt-500" />}
                 <Icon className="h-[22px] w-[22px]" />
                 {label}
-                {id === 'teams' && result && !active && (
-                  <span className="absolute right-[28%] top-2.5 h-1.5 w-1.5 rounded-full bg-volt-500" />
+                {id === 'court' && day.rotation && !active && (
+                  <span className="absolute right-[26%] top-2.5 h-1.5 w-1.5 rounded-full bg-volt-500" />
                 )}
               </button>
             )
@@ -291,23 +399,30 @@ export default function App() {
 
       <HistorySheet
         open={historyOpen}
-        history={history}
-        currentSignature={result?.signature}
+        history={day.history}
+        currentSignature={day.draw?.signature}
         onClose={() => setHistoryOpen(false)}
         onRestore={(entry) => {
-          setResult({
-            teams: entry.teams,
-            sums: entry.sums,
-            signature: entry.signature,
-            spread: entry.spread,
-            exhausted: false,
+          commit({
+            ...day,
+            draw: {
+              teams: entry.teams,
+              sums: entry.sums,
+              signature: entry.signature,
+              spread: entry.spread,
+              teamSize: entry.teamSize,
+              exhausted: false,
+            },
+            rotation: startRotation(entry.teams),
+            lastEvent: { type: 'restore' },
           })
           setHistoryOpen(false)
         }}
         onClear={() => {
-          setHistory(
-            result ? history.filter((entry) => entry.signature === result.signature) : [],
-          )
+          commit({
+            ...day,
+            history: day.history.filter((entry) => entry.signature === day.draw?.signature).slice(0, 1),
+          })
           setHistoryOpen(false)
           notify('Histórico limpo.')
         }}
