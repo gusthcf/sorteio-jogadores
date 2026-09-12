@@ -12,7 +12,13 @@
  * ninguem fica de fora duas partidas seguidas.
  */
 
-import { BEGINNER_MAX_RATING, sortTeam } from './balance.js'
+import {
+  BEGINNER_MAX_RATING,
+  compareKeys,
+  fairnessWindow,
+  projectedPlaySpread,
+  sortTeam,
+} from './balance.js'
 
 export const WINS_FOR_REDRAW = 3
 
@@ -24,6 +30,8 @@ export const BEGINNER_TOLERANCE = 1
 
 const r2 = (n) => Math.round(n * 100) / 100
 const sumOf = (players) => r2(players.reduce((acc, p) => acc + p.rating, 0))
+const EPSILON = 1e-9
+const NOT_ALLOWED = Number.MAX_SAFE_INTEGER
 
 /** Monta a rotacao a partir de um sorteio (times ja na ordem de entrada). */
 export function startRotation(orderedTeams) {
@@ -63,43 +71,65 @@ export function combinations(items, k) {
 
 /**
  * Escolhe quais jogadores do perdedor continuam em quadra para completar o time que entra.
+ * Criterios, em ordem:
  *
- *  1. Calcula, para cada combinacao possivel, a diferenca de estrelas contra o vencedor.
- *  2. Considera "equilibradas" as combinacoes ate BEGINNER_TOLERANCE acima da melhor.
- *  3. Entre elas, fica quem mantem MAIS iniciantes (0,5 · 1 · 1,5★) em quadra.
- *  4. Depois vale o melhor equilibrio; empates: menos estrelas, depois quem jogou menos.
+ *  1. PARTIDAS PARECIDAS: a menor diferenca entre quem mais e quem menos tera jogado,
+ *     cedendo ate 1,5★ de equilibrio (2★ so quando isso deixa as partidas mais parelhas).
+ *  2. INICIANTES (0,5 · 1 · 1,5★): o maximo deles em quadra, custando ate BEGINNER_TOLERANCE
+ *     sobre o melhor equilibrio possivel.
+ *  3. Continua quem jogou menos partidas no dia (dentro do mesmo limite de equilibrio).
+ *  4. Equilibrio; depois menos estrelas; depois sorteio.
+ *
+ * Antes de alguem jogar (contadores zerados), 1 e 3 empatam e valem as regras antigas.
  */
-export function pickComplement({ loser, entering, opponent, need, matchCounts = {} }) {
+export function pickComplement({ loser, entering, opponent, need, waiting = [], matchCounts = {} }) {
   if (need <= 0) return { stay: [], leave: loser.slice() }
   if (need >= loser.length) return { stay: loser.slice(), leave: [] }
 
   const target = sumOf(opponent)
   const base = sumOf(entering)
+  const playingAnyway = [...opponent, ...entering]
+  const fair = [...loser, ...playingAnyway, ...waiting].some((p) => (matchCounts[p.id] || 0) > 0)
 
   const options = combinations(loser, need).map((stay) => {
+    const stayIds = new Set(stay.map((p) => p.id))
+    const leave = loser.filter((p) => !stayIds.has(p.id))
     const stars = sumOf(stay)
     return {
       stay,
       stars,
       gap: r2(Math.abs(base + stars - target)),
       beginners: stay.filter((p) => p.rating <= BEGINNER_MAX_RATING).length,
-      played: stay.reduce((acc, p) => acc + (matchCounts[p.id] || 0), 0),
+      spread: fair ? projectedPlaySpread([...playingAnyway, ...stay], [...leave, ...waiting], matchCounts) : 0,
+      load: stay.reduce((acc, p) => acc + (matchCounts[p.id] || 0), 0),
       tiebreak: Math.random(),
     }
   })
 
   const bestGap = Math.min(...options.map((o) => o.gap))
-  const eligible = options.filter((o) => o.gap <= bestGap + BEGINNER_TOLERANCE + 1e-9)
-  eligible.sort(
-    (a, b) =>
-      b.beginners - a.beginners ||
-      a.gap - b.gap ||
-      a.stars - b.stars ||
-      a.played - b.played ||
-      a.tiebreak - b.tiebreak,
-  )
+  const window = fair ? fairnessWindow(options, bestGap) : { limit: Infinity, fairest: Infinity }
+  const beginnerLimit = bestGap + BEGINNER_TOLERANCE
 
-  const stayIds = new Set(eligible[0].stay.map((p) => p.id))
+  const keyOf = (o) => [
+    o.spread <= window.fairest + EPSILON ? 0 : 1,
+    o.gap <= beginnerLimit + EPSILON ? -o.beginners : 0,
+    o.gap <= window.limit + EPSILON ? o.load : NOT_ALLOWED,
+    o.gap,
+    o.stars,
+    o.tiebreak,
+  ]
+
+  let chosen = options[0]
+  let chosenKey = keyOf(chosen)
+  for (const option of options.slice(1)) {
+    const key = keyOf(option)
+    if (compareKeys(key, chosenKey) < 0) {
+      chosen = option
+      chosenKey = key
+    }
+  }
+
+  const stayIds = new Set(chosen.stay.map((p) => p.id))
   return {
     stay: loser.filter((p) => stayIds.has(p.id)),
     leave: loser.filter((p) => !stayIds.has(p.id)),
@@ -121,6 +151,10 @@ export function registerWinner(rotation, winnerNumber, { teamSize = 6, matchCoun
 
   const count = rotation.streak?.number === winner.number ? rotation.streak.count + 1 : 1
   const played = [...first.players, ...second.players].map((p) => p.id)
+
+  // Os contadores ja incluem a partida que acabou de terminar.
+  const countsAfter = { ...matchCounts }
+  for (const id of played) countsAfter[id] = (countsAfter[id] || 0) + 1
 
   const event = {
     winner: winner.number,
@@ -147,7 +181,8 @@ export function registerWinner(rotation, winnerNumber, { teamSize = 6, matchCoun
       entering: entering.players,
       opponent: winner.players,
       need,
-      matchCounts,
+      waiting: rest.flatMap((team) => team.players),
+      matchCounts: countsAfter,
     })
 
     const completed = {

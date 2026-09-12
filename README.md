@@ -81,7 +81,7 @@ O objetivo é fazer a **soma de estrelas de cada time ficar o mais próxima poss
 
 O time incompleto de fora é comparado pela sua **força projetada**: a soma atual mais a média do grupo para cada vaga que ainda será preenchida. Assim ele não fica nem com os melhores, nem com os piores.
 
-Os testes comparam o resultado com a **força bruta** (todas as divisões possíveis): para 12 e 18 jogadores, o app sempre encontra a menor diferença que existe.
+Os testes comparam o resultado com a **força bruta** (todas as divisões possíveis): no sorteio inicial com 12 e 18 jogadores, o app sempre encontra a menor diferença que existe. Nos sorteios do meio do dia, a prioridade passa a ser igualar o número de partidas (veja abaixo).
 
 ### 4. A regra de ouro: nunca repetir
 
@@ -107,20 +107,30 @@ Acima do botão **Venceu** de cada time fica o placar, de 0 a 99. **Toque à dir
 - Um sorteio antigo do histórico só pode ser reutilizado se não colocar de fora, de novo, quem acabou de esperar.
 - Com **mais de 18**, dois times esperam e o Time 4 precisa aguardar o Time 3 entrar: nesse caso a espera máxima é de duas partidas.
 
+#### Partidas parecidas para todos
+
+Ao longo do dia, o app tenta manter **todo mundo com um número parecido de partidas jogadas** — e isso vale mais do que o equilíbrio dos times:
+
+- Quando o time que entra é completado, **sai para descansar quem jogou mais** e continua quem jogou menos.
+- Nos novos sorteios, **começa de fora quem jogou mais**.
+- Para isso, os times podem ficar até **1,5★** diferentes — ou **2★** nos casos difíceis, só quando isso realmente diminui a diferença de partidas entre os jogadores. Acima desse limite, o equilíbrio vence.
+- No sorteio inicial ninguém jogou ainda, então vale o equilíbrio máximo.
+
+> Quem vence continua em quadra — é a regra da quadra —, então quem está num time vencedor naturalmente joga mais. A regra das 3 vitórias limita isso. Com exatamente 18 jogadores o perdedor sai inteiro, então a compensação acontece nos novos sorteios.
+
 #### Completando o time que entra
 
-Se o time que vai entrar está incompleto (por exemplo, o Time 3 com 1 jogador), ele é **completado com jogadores do time que perdeu**. Quem continua em quadra não é aleatório:
+Se o time que vai entrar está incompleto (por exemplo, o Time 3 com 1 jogador), ele é **completado com jogadores do time que perdeu**. Quem continua em quadra não é aleatório. Em ordem de prioridade:
 
-1. O app calcula todas as combinações possíveis e acha **a de melhor equilíbrio** contra o time vencedor.
-2. Considera equilibradas todas as combinações até **1 estrela** acima dessa melhor.
-3. Entre elas, **mantém em quadra o maior número possível de iniciantes (0,5, 1 e 1,5★)** — eles precisam jogar mais para evoluir.
-4. Depois disso vale o melhor equilíbrio; em empate, fica quem tem menos estrelas e, por último, quem jogou menos partidas no dia.
+1. **Partidas parecidas** — sai quem jogou mais partidas no dia, dentro do limite de 1,5★ (ou 2★) descrito acima.
+2. **Iniciantes (0,5, 1 e 1,5★)** — entre as opções igualmente justas, fica o maior número possível de iniciantes, desde que custe no máximo **1 estrela** a mais que o melhor equilíbrio.
+3. **Equilíbrio** — depois disso, a combinação mais equilibrada contra o time vencedor.
 
-Se manter um iniciante deixaria a partida desequilibrada além dessa margem, o equilíbrio vence. Os jogadores que continuaram aparecem marcados com a origem (ex.: `T2`).
+Os jogadores que continuaram aparecem marcados com a origem (ex.: `T2`).
 
 #### 3 vitórias seguidas = novo sorteio
 
-Se **o mesmo time vencer 3 partidas seguidas**, o app faz **um novo sorteio automaticamente** para reequilibrar o dia. A contagem de partidas continua valendo e quem estava de fora começa jogando.
+Se **o mesmo time vencer 3 partidas seguidas**, o app faz **um novo sorteio automaticamente** para reequilibrar o dia. A contagem de partidas continua valendo: quem estava de fora começa jogando e quem jogou mais tende a começar de fora.
 
 #### Desfazer
 
@@ -163,7 +173,8 @@ A suíte ([`tests/rules.test.js`](tests/rules.test.js)) usa o test runner nativo
 - equilíbrio igual ao ótimo encontrado por força bruta (12 e 18 jogadores);
 - que um novo sorteio nunca repete a divisão anterior;
 - ordem da quadra: vencedor fica, Time 3 antes do Time 4, perdedor para o fim da fila;
-- a escolha de quem completa o time: equilíbrio primeiro, iniciantes com prioridade dentro da margem;
+- a escolha de quem completa o time: partidas parecidas primeiro (cedendo no máximo 1,5★, ou 2★ só quando necessário), depois iniciantes, depois equilíbrio;
+- sorteios do meio do dia deixando de fora quem jogou mais, com os times dentro do limite de equilíbrio;
 - **ninguém fica de fora duas partidas seguidas** com 13 a 18 jogadores, inclusive após sorteios automáticos, manuais e com gente chegando;
 - 3 vitórias seguidas disparando o sorteio, contadores de partidas e placar registrado.
 

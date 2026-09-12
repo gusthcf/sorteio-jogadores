@@ -8,7 +8,13 @@
 
 import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { BEGINNER_MAX_RATING, drawTeams, rotationSizes } from '../src/lib/balance.js'
+import {
+  BALANCE_LIMIT,
+  BALANCE_LIMIT_HARD,
+  BEGINNER_MAX_RATING,
+  drawTeams,
+  rotationSizes,
+} from '../src/lib/balance.js'
 import {
   BEGINNER_TOLERANCE,
   WINS_FOR_REDRAW,
@@ -222,7 +228,7 @@ describe('equilíbrio do sorteio', () => {
 /* ------------------------------------------------------------ complemento */
 
 describe('quem continua em quadra para completar o time que entra', () => {
-  test('propriedade: equilíbrio primeiro; iniciantes (0,5 · 1 · 1,5★) têm prioridade dentro da margem', () => {
+  test('sem partidas jogadas: equilíbrio primeiro; iniciantes (0,5 · 1 · 1,5★) têm prioridade dentro da margem', () => {
     const rand = seeded(42)
     for (let round = 0; round < 500; round++) {
       const loser = makeRoster(6, rand, 'l')
@@ -420,6 +426,124 @@ describe('ninguém fica de fora duas partidas seguidas', () => {
       const report = simulateDay(makeRoster(n, seeded(3000 + n)), seeded(4000 + n))
       assert.equal(report.maxQueueTeams, 2)
       assert.ok(report.maxConsecutiveBench <= 2, `${n} jogadores: esperou ${report.maxConsecutiveBench}`)
+    }
+  })
+})
+
+/* ------------------------------------------- partidas parecidas entre os jogadores */
+
+describe('número de partidas parecido entre os jogadores', () => {
+  const countsFor = (groups) => {
+    const counts = {}
+    for (const [list, value] of groups) for (const p of list) counts[p.id] = value
+    return counts
+  }
+
+  test('propriedade: partidas antes do equilíbrio, cedendo até 1,5★ (2★ só quando necessário)', () => {
+    const rand = seeded(2024)
+    for (let round = 0; round < 500; round++) {
+      const loser = makeRoster(6, rand, 'l')
+      const winner = makeRoster(6, rand, 'w')
+      const entering = makeRoster(1 + Math.floor(rand() * 5), rand, 'e')
+      const waiting = makeRoster(Math.floor(rand() * 7), rand, 'q')
+      const matchCounts = {}
+      for (const p of [...loser, ...winner, ...entering, ...waiting]) matchCounts[p.id] = Math.floor(rand() * 8)
+      const need = TEAM_SIZE - entering.length
+
+      const { stay } = pickComplement({ loser, entering, opponent: winner, need, waiting, matchCounts })
+
+      const gapOf = (group) => Math.abs(sum(entering) + sum(group) - sum(winner))
+      const spreadOf = (group) => {
+        const staying = new Set(ids(group))
+        const counts = [
+          ...[...winner, ...entering, ...group].map((p) => matchCounts[p.id] + 1),
+          ...[...loser.filter((p) => !staying.has(p.id)), ...waiting].map((p) => matchCounts[p.id]),
+        ]
+        return Math.max(...counts) - Math.min(...counts)
+      }
+      const options = combinations(loser, need)
+      const bestGap = Math.min(...options.map(gapOf))
+      const soft = Math.max(BALANCE_LIMIT, bestGap)
+      const hard = Math.max(BALANCE_LIMIT_HARD, bestGap)
+      const fairestWithin = (limit) =>
+        Math.min(...options.filter((o) => gapOf(o) <= limit + 1e-9).map(spreadOf))
+
+      assert.ok(
+        spreadOf(stay) <= fairestWithin(soft),
+        `rodada ${round}: havia opção com partidas mais parelhas dentro de 1,5★`,
+      )
+      assert.ok(
+        gapOf(stay) <= Math.max(hard, bestGap + BEGINNER_TOLERANCE) + 1e-9,
+        `rodada ${round}: desequilibrou além do permitido (${gapOf(stay)}★)`,
+      )
+      if (gapOf(stay) > soft + 1e-9 && gapOf(stay) > bestGap + BEGINNER_TOLERANCE + 1e-9) {
+        assert.ok(
+          fairestWithin(hard) < fairestWithin(soft),
+          `rodada ${round}: passou de 1,5★ sem deixar as partidas mais parelhas`,
+        )
+      }
+    }
+  })
+
+  test('exemplo: quem jogou muito mais sai para descansar, mesmo custando 1,5★ de equilíbrio', () => {
+    const loser = fixed('L', [5, 3, 3, 3, 3, 3])
+    const entering = fixed('E', [3])
+    const winner = fixed('W', [4, 3.5, 3, 3, 3, 3]) // 19,5★
+    const matchCounts = { ...countsFor([[loser, 2], [entering, 2], [winner, 5]]), L0: 9 }
+
+    const withCounts = pickComplement({ loser, entering, opponent: winner, need: 5, matchCounts })
+    assert.deepEqual(ids(withCounts.leave), ['L0'], 'o jogador de 9 partidas deveria descansar')
+
+    // Sem contar partidas, o equilíbrio (0,5★) manteria o de 5★ em quadra.
+    const balanceOnly = pickComplement({ loser, entering, opponent: winner, need: 5 })
+    assert.ok(!ids(balanceOnly.leave).includes('L0'))
+  })
+
+  test('exemplo: vai até 2★ quando só assim as partidas ficam mais parelhas', () => {
+    const loser = fixed('L', [5, 3, 3, 3, 3, 3])
+    const entering = fixed('E', [3])
+    const winner = fixed('W', [5, 4, 3, 3, 3, 2]) // 20★: tirar o de 5★ deixa 2★ de diferença
+    const matchCounts = { ...countsFor([[loser, 2], [entering, 2], [winner, 5]]), L0: 9 }
+    const { leave } = pickComplement({ loser, entering, opponent: winner, need: 5, matchCounts })
+    assert.deepEqual(ids(leave), ['L0'])
+  })
+
+  test('exemplo: o equilíbrio não cede além de 2★', () => {
+    const loser = fixed('L', [5, 3, 3, 3, 3, 3])
+    const entering = fixed('E', [3])
+    const winner = fixed('W', [5, 4, 3, 3, 3, 2.5]) // 20,5★: tirar o de 5★ deixaria 2,5★
+    const matchCounts = { ...countsFor([[loser, 2], [entering, 2], [winner, 5]]), L0: 9 }
+    const { leave } = pickComplement({ loser, entering, opponent: winner, need: 5, matchCounts })
+    assert.ok(!ids(leave).includes('L0'), 'não pode desequilibrar 2,5★')
+  })
+
+  test('sorteio com 13: quem jogou muito mais começa de fora, com times dentro de 1,5★', () => {
+    const rand = seeded(31)
+    let checked = 0
+    for (let round = 0; round < 60; round++) {
+      const players = makeRoster(13, rand)
+      const tired = players[Math.floor(rand() * players.length)]
+      const others = players.filter((p) => p !== tired)
+      if (bestSpreadTwoTeams(others) > BALANCE_LIMIT) continue // elenco em que é impossível
+      checked += 1
+
+      const matchCounts = Object.fromEntries(players.map((p) => [p.id, 3]))
+      matchCounts[tired.id] = 9
+      const { teams, spread } = drawTeams({ players, teamSize: TEAM_SIZE, matchCounts })
+      assert.deepEqual(ids(teams[2]), [tired.id], `rodada ${round}`)
+      assert.ok(spread <= BALANCE_LIMIT, `rodada ${round}: ${spread}★ de diferença`)
+    }
+    assert.ok(checked >= 40)
+  })
+
+  test('sorteio com 18: o time de fora é formado por quem jogou mais', () => {
+    const tired = fixed('T', [5, 4, 3, 3, 2, 1])
+    const players = [...fixed('A', [5, 4, 3, 3, 2, 1]), ...fixed('B', [5, 4, 3, 3, 2, 1]), ...tired]
+    const matchCounts = Object.fromEntries(players.map((p) => [p.id, tired.includes(p) ? 8 : 4]))
+    for (let round = 0; round < 20; round++) {
+      const { teams, spread } = drawTeams({ players, teamSize: TEAM_SIZE, matchCounts })
+      assert.deepEqual(ids(teams[2]).sort(), ids(tired).sort(), `rodada ${round}`)
+      assert.ok(spread <= BALANCE_LIMIT)
     }
   })
 })
