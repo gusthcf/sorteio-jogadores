@@ -1,0 +1,105 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-ink-950 text-white antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior-y: none;
+  }
+
+  /* Fundo com dois halos discretos: da profundidade sem virar "gradiente de IA". */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background:
+      radial-gradient(60rem 40rem at 12% -10%, rgba(204, 255, 51, 0.06), transparent 60%),
+      radial-gradient(45rem 35rem at 100% 0%, rgba(88, 130, 255, 0.05), transparent 55%);
+  }
+
+  button {
+    @apply select-none;
+  }
+
+  /* Foco visivel e consistente em todo o app. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-volt-500/70 ring-offset-2 ring-offset-ink-950;
+  }
+
+  input[type='text'],
+  input[type='number'] {
+    @apply appearance-none;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-3xl border border-white/[0.07] bg-ink-850/80 shadow-soft backdrop-blur-sm;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-2xl font-semibold
+           transition active:scale-[.97] disabled:pointer-events-none disabled:opacity-40;
+  }
+
+  .btn-primary {
+    @apply btn bg-volt-500 text-ink-950 shadow-glow hover:bg-volt-400;
+  }
+
+  .btn-ghost {
+    @apply btn border border-white/10 bg-white/[0.04] text-white hover:bg-white/[0.08];
+  }
+
+  .btn-quiet {
+    @apply btn text-white/60 hover:text-white;
+  }
+
+  .field {
+    @apply w-full rounded-2xl border border-white/10 bg-ink-900 px-4 py-3.5 text-[17px]
+           font-medium text-white placeholder-white/30 transition
+           focus:border-volt-500/60 focus:bg-ink-900;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-white/10
+           bg-white/[0.05] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-white/60;
+  }
+
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Esconde a scrollbar nas faixas horizontais sem perder o scroll. */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
